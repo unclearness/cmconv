@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "cmconv"
+version = "0.1.0"
+description = ""
+authors = ["unlclearness <unclearness.dev@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+numpy = "^2.2.1"
+opencv-python = "^4.10.0.84"
+torch = "^2.5.1"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
