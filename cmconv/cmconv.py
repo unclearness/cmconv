@@ -402,15 +402,16 @@ def undistort_image(model: CameraModelBase, img: np.ndarray) -> np.ndarray:
     # Use cv2.remap to remap the image using undistorted coordinates
     distorted_coords_x = distorted_coords[..., 0] * (width - 1)
     distorted_coords_y = distorted_coords[..., 1] * (height - 1)
+
     undistorted_img = cv2.remap(
-        img,
+        img.astype(np.uint8),
         distorted_coords_x.astype(np.float32),
         distorted_coords_y.astype(np.float32),
         interpolation=cv2.INTER_LINEAR,
         borderMode=cv2.BORDER_CONSTANT,
     )
 
-    return undistorted_img
+    return undistorted_img.astype(np.uint8)
 
 
 def convert(
@@ -451,6 +452,67 @@ def convert(
 
         # Take the pixel-wise L2 loss
         loss_pixwise = (src_distorted - dst_distorted).pow(2)
+
+        # Apply weights to x and y directions
+        loss_pixwise[:, 0] *= x_weight
+        loss_pixwise[:, 1] *= y_weight
+
+        # Compute the mean and update the parameters
+        loss = torch.mean(loss_pixwise)
+        loss.backward()
+        optimizer.step()
+
+        # Limit the range of the parameters
+        dst.limit_range()
+
+        if loss.item() < th_loss:
+            break
+        if i % 100 == 0:
+            print("Iter:", i, "Loss:", loss.item())
+    print("Iter:", i, "Loss:", loss.item())
+    for k, v in dst.params.items():
+        if v.requires_grad:
+            print("Optimized", k, v.item())
+
+
+def convert_inverse(
+    src: CameraModelBase,
+    dst: CameraModelBase,
+    th_iter: int = 4000,
+    th_loss: float = 1e-8,
+    n_grids: int = 1024,
+    lr: float = 0.01,
+    x_weight: float | torch.Tensor = 1.0,
+    y_weight: float | torch.Tensor = 1.0,
+) -> None:
+    # Setup optimizer
+    opt_params = []
+    for k, v in dst.params.items():
+        if v.requires_grad:
+            print("Optimize", k, v.item())
+            opt_params.append(v)
+
+    # Prepare grid points
+    uniform_pts1d = torch.linspace(0, 1, n_grids, device=dst.device)
+    grid_x, grid_y = torch.meshgrid(uniform_pts1d, uniform_pts1d, indexing="ij")
+    uniform_pts2d = torch.stack([grid_x.flatten(), grid_y.flatten()], dim=1)
+
+    # Source distorted grid points are fixed
+    undistorted = src.undistort(uniform_pts2d).detach()
+    optimizer = torch.optim.Adam(opt_params, lr=lr)
+    num_opt_params = len(opt_params)
+    print("Number of optimized parameters:", num_opt_params)
+    if num_opt_params < 1:
+        print("Please set requires_grad=True for at least one parameter in dst.")
+        return
+
+    for i in range(th_iter):
+        optimizer.zero_grad()
+        # Apply distortion with the current parameters
+        dst_distorted = dst.distort(uniform_pts2d)
+
+        # Take the pixel-wise L2 loss
+        loss_pixwise = (undistorted - dst_distorted).pow(2)
 
         # Apply weights to x and y directions
         loss_pixwise[:, 0] *= x_weight
