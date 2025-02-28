@@ -1,3 +1,5 @@
+import math
+
 import torch
 import numpy as np
 import cv2
@@ -15,6 +17,9 @@ class CameraModelBase(object):
         raise NotImplementedError
 
     def undistort(self, pts: torch.Tensor) -> torch.Tensor:
+        raise NotImplementedError
+
+    def project(self, pts: torch.Tensor) -> torch.Tensor:
         raise NotImplementedError
 
     def limit_range(self) -> None:
@@ -133,6 +138,40 @@ class OpenCv(CameraModelBase):
         v = y * norm_fy + norm_cy
         return torch.stack([u, v], dim=1)
 
+    def project(self, pts: torch.Tensor) -> torch.Tensor:
+        fx = self.params["fx"]
+        fy = self.params["fy"]
+        cx = self.params["cx"]
+        cy = self.params["cy"]
+        k1 = self.params["k1"]
+        k2 = self.params["k2"]
+        p1 = self.params["p1"]
+        p2 = self.params["p2"]
+        k3 = self.params["k3"]
+        k4 = self.params["k4"]
+        k5 = self.params["k5"]
+        k6 = self.params["k6"]
+
+        x = pts[:, 0]
+        y = pts[:, 1]
+        z = pts[:, 2]
+        norm_cx = cx / self.width
+        norm_cy = cy / self.height
+        norm_fx = fx / self.width
+        norm_fy = fy / self.height
+        u1 = x / z
+        v1 = y / z
+        u2 = u1 * u1
+        v2 = v1 * v1
+        r2 = u2 + v2
+        _2uv = 2 * u1 * v1
+        kr = (1 + ((k3 * r2 + k2) * r2 + k1) * r2) / (
+            1 + ((k6 * r2 + k5) * r2 + k4) * r2
+        )
+        dx = norm_fx * (u1 * kr + p1 * _2uv + p2 * (r2 + 2 * u2)) + norm_cx
+        dy = norm_fy * (v1 * kr + p1 * (r2 + 2 * v2) + p2 * _2uv) + norm_cy
+        return torch.stack([dx, dy], dim=1)
+
     def limit_range(self) -> None:
         pass
 
@@ -192,6 +231,37 @@ class OpenCvFisheye(CameraModelBase):
     def limit_range(self) -> None:
         pass
 
+    def project(self, pts: torch.Tensor) -> torch.Tensor:
+        fx = self.params["fx"]
+        fy = self.params["fy"]
+        cx = self.params["cx"]
+        cy = self.params["cy"]
+        k1 = self.params["k1"]
+        k2 = self.params["k2"]
+        k3 = self.params["k3"]
+        k4 = self.params["k4"]
+
+        x = pts[:, 0]
+        y = pts[:, 1]
+        z = pts[:, 2]
+        norm_cx = cx / self.width
+        norm_cy = cy / self.height
+        norm_fx = fx / self.width
+        norm_fy = fy / self.height
+
+        u = x / z
+        v = y / z
+
+        r = torch.sqrt(u**2 + v**2)
+        theta = torch.atan(r)
+        rd = theta * (1 + k1 * theta**2 + k2 * theta**4 + k3 * theta**6 + k4 * theta**8)
+        scale = torch.where(r > 0, rd / r, 1)
+        ud = u * scale
+        vd = v * scale
+        dx = norm_fx * ud + norm_cx
+        dy = norm_fy * vd + norm_cy
+        return torch.stack([dx, dy], dim=1)
+
 
 class UnifiedCameraModel(CameraModelBase):
     def __init__(self, device: torch.device, width, height, fx, fy, cx, cy, alpha):
@@ -229,6 +299,38 @@ class UnifiedCameraModel(CameraModelBase):
 
         ud = u / denom
         vd = v / denom
+        dx = norm_fx * ud + norm_cx
+        dy = norm_fy * vd + norm_cy
+        return torch.stack([dx, dy], dim=1)
+
+    def project(self, pts: torch.Tensor) -> torch.Tensor:
+        fx = self.params["fx"]
+        fy = self.params["fy"]
+        cx = self.params["cx"]
+        cy = self.params["cy"]
+        alpha = self.params["alpha"]
+
+        x = pts[:, 0]
+        y = pts[:, 1]
+        z = pts[:, 2]
+
+        norm_cx = cx / self.width
+        norm_cy = cy / self.height
+        norm_fx = fx / self.width
+        norm_fy = fy / self.height
+
+        u = x / z
+        v = y / z
+
+        # d = sqrt(u^2 + v^2 + 1) is sqrt(x^2+y^2+z^2)/z
+        d = torch.sqrt(u**2 + v**2 + 1)
+
+        alpha = torch.where(alpha == 0, alpha + CAMCALIBCONV_EPS, alpha)
+        denom = alpha * d + (1.0 - alpha)
+
+        ud = u / denom
+        vd = v / denom
+
         dx = norm_fx * ud + norm_cx
         dy = norm_fy * vd + norm_cy
         return torch.stack([dx, dy], dim=1)
@@ -282,6 +384,36 @@ class EnhancedUnifiedCameraModel(CameraModelBase):
         dy = norm_fy * vd + norm_cy
         return torch.stack([dx, dy], dim=1)
 
+    def project(self, pts: torch.Tensor) -> torch.Tensor:
+        fx = self.params["fx"]
+        fy = self.params["fy"]
+        cx = self.params["cx"]
+        cy = self.params["cy"]
+        alpha = self.params["alpha"]
+        beta = self.params["beta"]
+
+        x = pts[:, 0]
+        y = pts[:, 1]
+        z = pts[:, 2]
+        norm_cx = cx / self.width
+        norm_cy = cy / self.height
+        norm_fx = fx / self.width
+        norm_fy = fy / self.height
+
+        u = x / z
+        v = y / z
+
+        d = torch.sqrt(beta * (u**2 + v**2) + 1)
+
+        alpha = torch.where(alpha == 0, alpha + CAMCALIBCONV_EPS, alpha)
+        denom = alpha * d + (1.0 - alpha)
+
+        ud = u / denom
+        vd = v / denom
+        dx = norm_fx * ud + norm_cx
+        dy = norm_fy * vd + norm_cy
+        return torch.stack([dx, dy], dim=1)
+
     def limit_range(self) -> None:
         with torch.no_grad():
             self.params["alpha"].data.clamp(CAMCALIBCONV_EPS, 1.0)
@@ -328,6 +460,37 @@ class DoubleSphere(CameraModelBase):
         dy = norm_fy * vd + norm_cy
         return torch.stack([dx, dy], dim=1)
 
+    def project(self, pts: torch.Tensor) -> torch.Tensor:
+        fx = self.params["fx"]
+        fy = self.params["fy"]
+        cx = self.params["cx"]
+        cy = self.params["cy"]
+        xi = self.params["xi"]
+        alpha = self.params["alpha"]
+
+        x = pts[:, 0]
+        y = pts[:, 1]
+        z = pts[:, 2]
+
+        norm_cx = cx / self.width
+        norm_cy = cy / self.height
+        norm_fx = fx / self.width
+        norm_fy = fy / self.height
+
+        d1 = torch.sqrt(x**2 + y**2 + z**2)
+        z_xi = xi * d1 + z
+        d2 = torch.sqrt(x**2 + y**2 + z_xi**2)
+
+        alpha = torch.where(alpha == 0, alpha + CAMCALIBCONV_EPS, alpha)
+        denom = alpha * d2 + (1.0 - alpha) * z_xi
+
+        u = x / denom
+        v = y / denom
+
+        dx = norm_fx * u + norm_cx
+        dy = norm_fy * v + norm_cy
+        return torch.stack([dx, dy], dim=1)
+
     def limit_range(self) -> None:
         pass
 
@@ -353,7 +516,7 @@ def make_distorted_grid_image(
 
     img_size = (height, width, 3)
     if img is None:
-        img = np.ones(img_size, dtype=np.uint8) * bkg_color
+        img = (np.ones(img_size) * bkg_color).astype(np.uint8)
     else:
         img = cv2.resize(img, (width, height)).astype(np.uint8)
 
@@ -380,6 +543,24 @@ def make_distorted_grid_image(
         cv2.circle(img, tuple(pt), radius, line_color, -1)
 
     return img
+
+
+def visualize_projected_points(src_projected, dst_projected,
+                               width, height, skip=1):
+    src_projected[..., 0] *= width - 1
+    src_projected[..., 1] *= height - 1
+    dst_projected[..., 0] *= width - 1
+    dst_projected[..., 1] *= height - 1
+    src_projected = src_projected.cpu().detach().numpy()
+    dst_projected = dst_projected.cpu().detach().numpy()
+
+    vis = np.zeros((height, width, 3), dtype=np.uint8)
+    for src_pt, dst_pt in zip(src_projected[::skip], dst_projected[::skip]):
+        pt1 = tuple(src_pt.astype(np.int32))
+        pt2 = tuple(dst_pt.astype(np.int32))
+        cv2.circle(vis, pt1, 2, (0, 0, 255), -1)
+        cv2.circle(vis, pt2, 2, (255, 0, 0), -1)
+    return vis
 
 
 def undistort_image(model: CameraModelBase, img: np.ndarray) -> np.ndarray:
@@ -535,3 +716,96 @@ def convert_inverse(
         if v.requires_grad:
             print("Optimized", k, v.item())
 
+
+def warp_to_frustum(n_grids, near, far, fovx_deg, device):
+    uniform_pts1d = torch.linspace(0, 1, n_grids, device=device)
+    grid_x, grid_y, grid_z = torch.meshgrid(
+        uniform_pts1d, uniform_pts1d, uniform_pts1d, indexing="ij"
+    )
+
+    # liearly interpolate z
+    z = near + grid_z * (far - near)
+
+    fov_rad = math.radians(fovx_deg)
+    tan_half_fov = torch.tan(torch.tensor(fov_rad / 2.0, device=device))
+
+    # Since grid_x and grid_y take [0,1], shift to [-0.5, 0.5] to center 0, then scale to [-1,1].
+    # The width according to depth z is z * tan_half_fov, so multiply in each direction
+    x = (grid_x - 0.5) * 2 * z * tan_half_fov
+    y = (grid_y - 0.5) * 2 * z * tan_half_fov
+
+    return x, y, z
+
+
+def convert3d(
+    src: CameraModelBase,
+    dst: CameraModelBase,
+    th_iter: int = 5000,
+    th_loss: float = 1e-8,
+    n_grids: int = 128,
+    near: float = 0.1,
+    far: float = 10.0,
+    approx_fovx_deg: float = 130.0,
+    lr: float = 0.001,
+) -> None:
+    # Setup optimizer
+    opt_params = []
+    for k, v in dst.params.items():
+        if v.requires_grad:
+            print("Optimize", k, v.item())
+            opt_params.append(v)
+    num_opt_params = len(opt_params)
+    print("Number of optimized parameters:", num_opt_params)
+    if num_opt_params < 1:
+        print("Please set requires_grad=True for at least one parameter in dst.")
+        return
+    optimizer = torch.optim.Adam(opt_params, lr=lr)
+
+    if approx_fovx_deg < 0:
+        # Prepare grid points
+        uniform_pts1d = torch.linspace(0, 1, n_grids, device=src.device)
+        grid_x, grid_y, grid_z = torch.meshgrid(
+            uniform_pts1d, uniform_pts1d, uniform_pts1d, indexing="ij"
+        )
+        xy_min = -far / 2
+        # -far / 2 ~ far / 2
+        grid_x = grid_x * far + xy_min
+        grid_y = grid_y * far + xy_min
+        grid_z = grid_z * (far - near) + near
+    else:
+        approx_fovx_deg = min(max(approx_fovx_deg, 90), 179)
+        grid_x, grid_y, grid_z = warp_to_frustum(
+            n_grids, near, far, approx_fovx_deg, src.device
+        )
+    uniform_pts3d = torch.stack(
+        [grid_x.flatten(), grid_y.flatten(), grid_z.flatten()], dim=1
+    )
+
+    # Source distorted grid points are fixed
+    src_projected = src.project(uniform_pts3d).detach()
+    for i in range(th_iter):
+        optimizer.zero_grad()
+        # Apply distortion with the current parameters
+        dst_projected = dst.project(uniform_pts3d)
+
+        # Take the pixel-wise L2 loss
+        loss_pixwise = (src_projected - dst_projected).pow(2)
+
+        # Compute the mean and update the parameters
+        loss = torch.mean(loss_pixwise)
+        loss.backward()
+        optimizer.step()
+
+        # Limit the range of the parameters
+        dst.limit_range()
+
+        if loss.item() < th_loss:
+            break
+        if i % 100 == 0:
+            print("Iter:", i, "Loss:", loss.item())
+    print("Iter:", i, "Loss:", loss.item())
+    for k, v in dst.params.items():
+        if v.requires_grad:
+            print("Optimized", k, v.item())
+
+    return src_projected.detach(), dst_projected.detach()

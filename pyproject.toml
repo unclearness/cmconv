@@ -9,7 +9,7 @@ readme = "README.md"
 python = "^3.11"
 numpy = "^2.2.1"
 opencv-python = "^4.10.0.84"
-torch = "^2.5.1"
+torch = "^2.6.0"
 
 
 [build-system]

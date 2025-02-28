@@ -4,7 +4,6 @@ import numpy as np
 import os
 
 from cmconv import (
-    convert,
     make_distorted_grid_image,
     undistort_image,
     OpenCv,
@@ -12,6 +11,9 @@ from cmconv import (
     UnifiedCameraModel,
     EnhancedUnifiedCameraModel,
     DoubleSphere,
+    convert3d,
+    convert,
+    visualize_projected_points,
 )
 
 
@@ -56,17 +58,21 @@ if __name__ == "__main__":
                 continue
             v.requires_grad = True
 
-    # Let's try to convert the fisheye model to full OpenCV model
+    # # Let's try to convert the fisheye model to full OpenCV model
     opencv_full = OpenCv(device, 960, 768, 487.5, 495.0, 479.0, 386.0, 0, 0, 0, 0)
     set_params_except_intrinsics(opencv_full)
     print("Convert to OpenCV Full")
-    convert(fisheye, opencv_full)
+    src_projected, dst_projected = convert3d(fisheye, opencv_full)
     img = make_distorted_grid_image(
         opencv_full, fisheye.width, img=fisheye_grid_img, line_color=(255, 0, 0)
     )
     cv2.imwrite(out_dir + "grid_opencvfull_approx.png", img)
     img = undistort_image(opencv_full, img)
     cv2.imwrite(out_dir + "grid_opencvfull_approx_undistorted.png", img)
+    vis = visualize_projected_points(
+        src_projected, dst_projected, fisheye.width, fisheye.height, skip=128
+    )
+    cv2.imwrite(out_dir + "grid_opencvfull_approx_projected.png", vis)
     print()
 
     # Let's try to convert the fisheye model to OpenCV model with less parameters
@@ -78,52 +84,68 @@ if __name__ == "__main__":
     opencv.params["k5"].requires_grad = False
     opencv.params["k6"].requires_grad = False
     print("Convert to OpenCV")
-    convert(fisheye, opencv)
+    src_projected, dst_projected = convert3d(fisheye, opencv)
     img = make_distorted_grid_image(
         opencv, fisheye.width, img=fisheye_grid_img, line_color=(255, 120, 120)
     )
     cv2.imwrite(out_dir + "grid_opencv_approx.png", img)
     img = undistort_image(opencv, img)
     cv2.imwrite(out_dir + "grid_opencv_approx_undistorted.png", img)
+    vis = visualize_projected_points(
+        src_projected, dst_projected, fisheye.width, fisheye.height, skip=128
+    )
+    cv2.imwrite(out_dir + "grid_opencv_approx_projected.png", vis)
     print()
 
     # Let's try to convert the fisheye model to Unified Camera Model
     ucm = UnifiedCameraModel(device, 960, 768, 487.5, 495.0, 479.0, 386.0, 0)
     set_params_except_intrinsics(ucm)
     print("Convert to UCM")
-    convert(fisheye, ucm)
+    src_projected, dst_projected = convert3d(fisheye, ucm)
     img = make_distorted_grid_image(
         ucm, fisheye.width, img=fisheye_grid_img, line_color=(0, 255, 0)
     )
     cv2.imwrite(out_dir + "grid_ucm_approx.png", img)
     img = undistort_image(ucm, img)
     cv2.imwrite(out_dir + "grid_ucm_approx_undistorted.png", img)
+    vis = visualize_projected_points(
+        src_projected, dst_projected, fisheye.width, fisheye.height, skip=128
+    )
+    cv2.imwrite(out_dir + "grid_ucm_approx_projected.png", vis)
     print()
 
     # Let's try to convert the fisheye model to Enhanced Unified Camera Model
     eucm = EnhancedUnifiedCameraModel(
-        device, 960, 768, 487.5, 495.0, 479.0, 386.0, 0, 0
+        device, 960, 768, 487.5, 495.0, 479.0, 386.0, 0.0, 0.0
     )
     set_params_except_intrinsics(eucm)
     print("Convert to EUCM")
-    convert(fisheye, eucm)
+    src_projected, dst_projected = convert3d(fisheye, eucm)
     img = make_distorted_grid_image(
         eucm, fisheye.width, img=fisheye_grid_img, line_color=(0, 0, 255)
     )
     cv2.imwrite(out_dir + "grid_eucm_approx.png", img)
     img = undistort_image(eucm, img)
     cv2.imwrite(out_dir + "grid_eucm_approx_undistorted.png", img)
+    vis = visualize_projected_points(
+        src_projected, dst_projected, fisheye.width, fisheye.height, skip=128
+    )
+    cv2.imwrite(out_dir + "grid_eucm_approx_projected.png", vis)
     print()
 
     # Let's try to convert the fisheye model to Double Sphere model
-    ds = DoubleSphere(device, 960, 768, 487.5, 495.0, 479.0, 386.0, 0, 0)
+    ds = DoubleSphere(device, 960, 768, 487.5, 495.0, 479.0, 386.0, 0.3, 0.4)
     set_params_except_intrinsics(ds)
     print("Convert to Double Sphere")
-    convert(fisheye, ds)
+    src_projected, dst_projected = convert3d(fisheye, ds)
     img = make_distorted_grid_image(
         ds, fisheye.width, img=fisheye_grid_img, line_color=(255, 255, 0)
     )
     cv2.imwrite(out_dir + "grid_ds_approx.png", img)
     img = undistort_image(ds, img)
     cv2.imwrite(out_dir + "grid_ds_approx_undistorted.png", img)
+    vis = visualize_projected_points(
+        src_projected, dst_projected, fisheye.width, fisheye.height, skip=128
+    )
+    cv2.imwrite(out_dir + "grid_ds_approx_projected.png", vis)
     print()
